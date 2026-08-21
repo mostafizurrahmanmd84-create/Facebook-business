@@ -1,8 +1,3 @@
-declare const global: typeof globalThis;
-
-declare const process: NodeJS.Process;
-declare const console: Console;
-
 interface ErrorConstructor {
     /**
      * Creates a `.stack` property on `targetObject`, which when accessed returns
