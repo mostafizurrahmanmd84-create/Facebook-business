@@ -66,6 +66,17 @@ const getMobileFields = (row) => ({
   stock: getColumnValue(row, ['productstock', 'stock', 'availability'])
 });
 
+export const formatMobileProductRows = (rows = []) => rows.map((row) => {
+  const fields = getMobileFields(row);
+  return {
+    'Brand + Model': fields.model,
+    'Storage + RAM': fields.ram,
+    'Physical Condition': fields.condition,
+    Price: fields.price,
+    'Product Stock': fields.stock
+  };
+});
+
 const parsePrice = (value) => {
   const normalized = normalizeDigits(value).replace(/,/g, '');
   const match = normalized.match(/\d+(?:\.\d+)?/);
@@ -80,20 +91,22 @@ const parsePriceAmount = (value) => {
   return match[2] ? amount * 1000 : amount;
 };
 
-const applyPriceUnit = (amount, value) => /(?:হাজার|thousand|k)/i.test(value) ? amount * 1000 : amount;
-
 const getPriceRange = (query) => {
   const normalized = normalizeDigits(query).toLowerCase();
-  const amountPattern = /\d+(?:[,.]\d+)?\s*(?:হাজার|হাজারের|thousand|k)?/g;
+  const amountPattern = /\d+(?:[,.]\d+)?\s*(?:হাজার(?:ের)?|thousand|k)?/g;
   const amountMatches = [...normalized.matchAll(amountPattern)];
   const amounts = amountMatches.map((match) => parsePriceAmount(match[0])).filter(Number.isFinite);
-  if (amounts.length >= 2 && /-|–|—|\bto\b|থেকে/.test(normalizeDigits(query).toLowerCase())) {
-    const rangeUnit = amountMatches[1][0];
-    return { min: applyPriceUnit(amounts[0], rangeUnit), max: applyPriceUnit(amounts[1], rangeUnit) };
+  const rangeConnector = /-|–|—|\b(?:to|between|thake|theke|moddhe|modhe|mode)\b|থেকে|মধ্যে/;
+  if (amounts.length >= 2 && rangeConnector.test(normalized)) {
+    const rangeUnit = amountMatches.slice(0, 2).map((match) => match[0]).find((value) => /(?:হাজার|thousand|k)/i.test(value));
+    const normalizedAmounts = amounts.slice(0, 2).map((amount, index) => {
+      const matchedValue = amountMatches[index][0];
+      return rangeUnit && !/(?:হাজার|thousand|k)/i.test(matchedValue) ? amount * 1000 : amount;
+    });
+    return { min: normalizedAmounts[0], max: normalizedAmounts[1] };
   }
-  if (amounts.length && normalized.includes('হাজার') && normalized.includes('মধ্যে')) return { max: amounts[0] };
-  if (amounts.length && ['under', 'below', 'within', 'less than', 'এর মধ্যে', 'মধ্যে', 'কম'].some((term) => normalized.includes(term))) return { max: amounts[0] };
-  if (amounts.length && ['above', 'over', 'more than', 'এর বেশি'].some((term) => normalized.includes(term))) return { min: amounts[0] };
+  if (amounts.length && ['under', 'below', 'within', 'less than', 'er moddhe', 'er modhe', 'er mode', 'এর মধ্যে', 'মধ্যে', 'কম'].some((term) => normalized.includes(term))) return { max: amounts[0] };
+  if (amounts.length && ['above', 'over', 'more than', 'er upor', 'er opor', 'এর উপরে', 'এর ওপর', 'এর বেশি'].some((term) => normalized.includes(term))) return { min: amounts[0] };
   return null;
 };
 
@@ -111,12 +124,12 @@ export const searchMobileBuySellProducts = (query, rows = []) => {
         ? ['in stock', 'available']
         : [];
   const conditionTerms = ['excellent', 'good', 'new', 'used', 'like new'].filter((term) => normalizedQuery.includes(term));
-    const ignoredTerms = new Set(['a', 'all', 'an', 'and', 'are', 'available', 'above', 'below', 'buy', 'can', 'condition', 'database', 'details', 'detail', 'do', 'does', 'every', 'for', 'full', 'give', 'good', 'has', 'have', 'how', 'in', 'is', 'less', 'like', 'low', 'mobile', 'model', 'more', 'new', 'of', 'out', 'phone', 'phones', 'phoneগুলো', 'ফোন', 'ফোনগুলো', 'মোবাইল', 'মোবাইলগুলো', 'price', 'ram', 'show', 'stock', 'tell', 'the', 'this', 'thousand', 'to', 'under', 'used', 'what', 'which', 'within', 'সব', 'সম্পূর্ণ', 'দাও', 'দেখাও', 'দাম', 'কত', 'আছে', 'এর', 'মধ্যে', 'কোন', 'হাজার', 'টাকা', 'টাকার', 'টি', 'থেকে']);
+    const ignoredTerms = new Set(['a', 'all', 'an', 'and', 'are', 'available', 'above', 'below', 'between', 'buy', 'can', 'condition', 'database', 'details', 'detail', 'do', 'does', 'every', 'for', 'full', 'give', 'good', 'has', 'have', 'how', 'in', 'is', 'less', 'like', 'low', 'mobile', 'model', 'more', 'new', 'of', 'out', 'phone', 'phones', 'phoneগুলো', 'ফোন', 'ফোনগুলো', 'মোবাইল', 'মোবাইলগুলো', 'price', 'ram', 'show', 'stock', 'tell', 'the', 'this', 'thousand', 'to', 'under', 'used', 'what', 'which', 'within', 'er', 'thake', 'theke', 'moddhe', 'modhe', 'mode', 'upar', 'upor', 'opor', 'ki', 'hobe', 'gula', 'ache', 'dekhao', 'সব', 'সম্পূর্ণ', 'দাও', 'দেখাও', 'দাম', 'কত', 'আছে', 'এর', 'মধ্যে', 'কোন', 'হাজার', 'টাকা', 'টাকার', 'টি', 'থেকে']);
     conditionTerms.forEach((term) => ignoredTerms.add(term));
-  const terms = normalizedQuery.split(/\s+/).filter((term) => term.length > 1 && !ignoredTerms.has(term) && !/^\d+(?:gb)?$/.test(term) && !/^(?:হাজার|হাজারের|টাকা|টাকার|এর|মধ্যে|কোন|আছে|ফোন|ফোনগুলো|মোবাইল|মোবাইলগুলো|দেখাও|দাও|দাম|কত|সম্পূর্ণ|সব|টি|থেকে)$/.test(term));
+  const terms = normalizedQuery.split(/\s+/).filter((term) => term.length > 1 && !ignoredTerms.has(term) && !/^\d+(?:[,.]\d+)?(?:gb|k)?$/.test(term) && !/^(?:হাজার|হাজারের|টাকা|টাকার|এর|মধ্যে|কোন|আছে|ফোন|ফোনগুলো|মোবাইল|মোবাইলগুলো|দেখাও|দাও|দাম|কত|সম্পূর্ণ|সব|টি|থেকে)$/.test(term));
   const modelTerms = terms.filter((term) => /[a-z0-9]/.test(term));
 
-  return rows.map((row, index) => {
+  const matches = rows.map((row, index) => {
     if (!row || typeof row !== 'object') return null;
     const fields = getMobileFields(row);
     const modelText = normalizeMobileText(fields.model);
@@ -130,7 +143,16 @@ export const searchMobileBuySellProducts = (query, rows = []) => {
     if (conditionTerms.length && !conditionTerms.some((term) => conditionText.includes(term))) return null;
     if (!wantsAll && modelTerms.length && !modelTerms.every((term) => modelText.includes(term))) return null;
     return { row, score: modelTerms.reduce((score, term) => score + (modelText.includes(term) ? 2 : allText.includes(term) ? 1 : 0), 0), index };
-  }).filter(Boolean).sort((left, right) => right.score - left.score || left.index - right.index).slice(0, 100).map(({ row }) => row);
+  }).filter(Boolean);
+
+  return matches.sort((left, right) => {
+    if (!priceRange) return right.score - left.score || left.index - right.index;
+    const leftPrice = parsePrice(getMobileFields(left.row).price);
+    const rightPrice = parsePrice(getMobileFields(right.row).price);
+    if (leftPrice === null) return rightPrice === null ? left.index - right.index : 1;
+    if (rightPrice === null) return -1;
+    return leftPrice - rightPrice || left.index - right.index;
+  }).map(({ row }) => row);
 };
 
 export const searchGoogleSheet = (query, rows = []) => {
