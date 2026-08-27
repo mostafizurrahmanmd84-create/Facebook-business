@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { FiMoon, FiSun, FiSend, FiCopy, FiCheckCircle, FiPlus } from 'react-icons/fi';
+import { FiMoon, FiSun, FiSend, FiCopy, FiCheckCircle, FiPlus, FiBarChart2, FiMessageSquare, FiUsers, FiShield, FiSettings, FiBell, FiBookOpen, FiActivity, FiArrowRight, FiLock, FiSearch, FiCheck, FiRefreshCw } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -15,6 +15,8 @@ I'm here to help you with:
 • And much more.
 
 Feel free to ask me anything!`;
+
+const ADMIN_TOKEN_STORAGE_KEY = 'nova-admin-token';
 
 function AiLogo({ className = '' }) {
   return (
@@ -34,7 +36,23 @@ function AiLogo({ className = '' }) {
   );
 }
 
-function App() {
+function StatCard({ icon: Icon, label, value, accent, tone = 'dark' }) {
+  return (
+    <div className={`rounded-2xl border p-4 ${tone === 'dark' ? 'border-white/10 bg-slate-900/60' : 'border-slate-200 bg-white'}`}>
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">{label}</p>
+          <p className="mt-3 text-3xl font-semibold text-white">{value}</p>
+        </div>
+        <div className={`flex h-11 w-11 items-center justify-center rounded-xl ${accent}`}>
+          <Icon className="text-lg text-white" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CustomerChatApp() {
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(false);
@@ -127,7 +145,8 @@ function App() {
 
     try {
       const response = await axios.post('/api/chat', {
-        messages: nextMessages,
+        messages: [{ role: 'user', content: userMessage.content }],
+        conversationId: chatId,
         model
       });
       const assistantMessage = {
@@ -343,6 +362,343 @@ function App() {
           </div>
         </footer>
       </div>
+    </div>
+  );
+}
+
+function SettingToggle({ label, description, enabled, saving, onChange }) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+      <div>
+        <p className="font-medium text-slate-100">{label}</p>
+        <p className="mt-1 text-xs text-slate-500">{description}</p>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={enabled}
+        aria-label={`${label}: ${enabled ? 'On' : 'Off'}`}
+        disabled={saving}
+        onClick={() => onChange(!enabled)}
+        className={`relative h-7 w-12 shrink-0 rounded-full transition ${enabled ? 'bg-emerald-500' : 'bg-slate-700'} ${saving ? 'cursor-wait opacity-60' : ''}`}
+      >
+        <span className={`absolute top-1 h-5 w-5 rounded-full bg-white transition ${enabled ? 'left-6' : 'left-1'}`} />
+      </button>
+    </div>
+  );
+}
+
+function AdminDashboard() {
+  const [token, setToken] = useState(() => localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || '');
+  const [tokenInput, setTokenInput] = useState(token);
+  const [authorized, setAuthorized] = useState(Boolean(token));
+  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState({
+    stats: {
+      totalConversations: 0,
+      todaysConversations: 0,
+      activeCustomers: 0,
+      aiResponses: 0,
+      humanHandled: 0,
+      unansweredQuestions: 0,
+      handoffRequests: 0,
+      salesLeads: 0
+    },
+    conversations: [],
+    unansweredQuestions: [],
+    systemHealth: {
+      ai: { status: 'offline', provider: 'unknown' },
+      googleSheets: { status: 'warning', configured: false },
+      facebookMessenger: { status: 'warning', configured: false },
+      storage: { status: 'connected', type: 'in-memory' },
+      lastCheckedAt: null
+    },
+    settings: {}
+  });
+  const [search, setSearch] = useState('');
+
+  const authHeader = token ? `Bearer ${token}` : '';
+  const [savingSetting, setSavingSetting] = useState('');
+
+  const fetchAdminOverview = useCallback(async (withToken = token) => {
+    if (!withToken) return;
+    setLoading(true);
+    try {
+      const response = await axios.get('/api/admin/overview', {
+        headers: { Authorization: `Bearer ${withToken}` }
+      });
+      setData((currentData) => response.data || currentData);
+    } catch (error) {
+      const message = error.response?.data?.error || 'Unable to load admin data.';
+      setAuthorized(false);
+      setToken('');
+      localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+      window.alert(message);
+    } finally {
+      setLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    fetchAdminOverview(token);
+  }, [fetchAdminOverview, token]);
+
+  const connectAdmin = () => {
+    const nextToken = tokenInput.trim();
+    if (!nextToken) {
+      window.alert('Please enter the admin token.');
+      return;
+    }
+    localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, nextToken);
+    setToken(nextToken);
+    setAuthorized(true);
+    fetchAdminOverview(nextToken);
+  };
+
+  const logout = () => {
+    localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+    setToken('');
+    setTokenInput('');
+    setAuthorized(false);
+  };
+
+  const updateSetting = async (key, value) => {
+    setSavingSetting(key);
+    try {
+      const response = await axios.patch('/api/admin/settings', { [key]: value }, { headers: { Authorization: authHeader } });
+      setData((currentData) => ({ ...currentData, settings: response.data.settings }));
+    } catch (error) {
+      window.alert(error.response?.data?.error || 'Unable to update this setting.');
+    } finally {
+      setSavingSetting('');
+    }
+  };
+
+  const filteredQuestions = (data.unansweredQuestions || []).filter((item) => {
+    const query = search.toLowerCase();
+    if (!query) return true;
+    const text = `${item.question || ''} ${item.response || ''} ${item.intent || ''} ${item.status || ''}`.toLowerCase();
+    return text.includes(query);
+  });
+
+  const filteredConversations = (data.conversations || []).filter((item) => {
+    const query = search.toLowerCase();
+    if (!query) return true;
+    const text = `${item.sessionId || ''} ${item.channel || ''} ${item.status || ''} ${item.lastMessage || ''}`.toLowerCase();
+    return text.includes(query);
+  });
+
+  if (!authorized) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 px-6">
+        <div className="w-full max-w-md rounded-3xl border border-slate-800 bg-slate-900/80 p-8 shadow-2xl shadow-indigo-950/40 backdrop-blur">
+          <div className="mb-6 flex items-center justify-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600">
+              <FiLock className="text-2xl text-white" />
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.25em] text-slate-400">Secure Access</p>
+              <h1 className="text-2xl font-semibold text-white">Admin Portal</h1>
+            </div>
+          </div>
+          <label className="mb-2 block text-sm text-slate-300">Dashboard access key</label>
+          <input
+            type="password"
+            value={tokenInput}
+            onChange={(event) => setTokenInput(event.target.value)}
+            placeholder="Enter INGEST_KEY"
+            className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none ring-0 transition focus:border-indigo-500"
+          />
+          <button
+            onClick={connectAdmin}
+            className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-500 to-violet-600 px-4 py-3 font-medium text-white shadow-lg shadow-indigo-900/40 transition hover:brightness-110"
+          >
+            <FiShield /> Access Dashboard
+          </button>
+          <p className="mt-4 text-sm text-slate-400">This token is stored only in local storage for the browser session and is never sent to the frontend app code.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-white">
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <header className="flex flex-col gap-4 rounded-3xl border border-slate-800 bg-slate-900/80 p-4 shadow-xl shadow-slate-950/40 backdrop-blur md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.28em] text-indigo-400">AI BUSINESS CONTROL CENTER</p>
+            <h1 className="mt-2 text-3xl font-semibold">Operations Dashboard</h1>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-950/80 px-3 py-2">
+              <FiSearch className="text-slate-400" />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search conversations or issues"
+                className="w-48 bg-transparent text-sm text-white outline-none placeholder:text-slate-500"
+              />
+            </div>
+            <button onClick={() => fetchAdminOverview()} className="flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
+              <FiRefreshCw className={loading ? 'animate-spin' : ''} /> Refresh
+            </button>
+            <button onClick={logout} className="rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">Logout</button>
+          </div>
+        </header>
+
+        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <StatCard icon={FiMessageSquare} label="Total conversations" value={data.stats?.totalConversations ?? 0} accent="bg-indigo-500" />
+          <StatCard icon={FiUsers} label="Active customers" value={data.stats?.activeCustomers ?? 0} accent="bg-cyan-500" />
+          <StatCard icon={FiBookOpen} label="Unanswered" value={data.stats?.unansweredQuestions ?? 0} accent="bg-amber-500" />
+          <StatCard icon={FiShield} label="Handoff requests" value={data.stats?.handoffRequests ?? 0} accent="bg-emerald-500" />
+        </div>
+
+        <div className="mt-6 grid gap-4 xl:grid-cols-[1.5fr_1fr]">
+          <div className="rounded-3xl border border-slate-800 bg-slate-900/80 p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Live overview</p>
+                <h2 className="mt-2 text-xl font-semibold">Recent conversations</h2>
+              </div>
+              <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-300">{data.systemHealth?.ai?.status || 'offline'}</span>
+            </div>
+
+            <div className="space-y-3">
+              {filteredConversations.length ? filteredConversations.slice(0, 6).map((conversation) => (
+                <div key={conversation.sessionId} className="rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-white">{conversation.customerId || conversation.sessionId}</p>
+                      <p className="text-xs text-slate-400">{conversation.channel} • {conversation.messageCount ?? 0} messages</p>
+                    </div>
+                    <span className={`rounded-full px-2 py-1 text-[10px] uppercase tracking-[0.14em] ${conversation.humanMode ? 'bg-amber-500/15 text-amber-300' : 'bg-emerald-500/15 text-emerald-300'}`}>
+                      {conversation.humanMode ? 'Human' : 'AI'}
+                    </span>
+                  </div>
+                  <p className="mt-3 line-clamp-2 text-sm text-slate-300">{conversation.lastMessage || 'No message recorded yet.'}</p>
+                </div>
+              )) : (
+                <div className="rounded-2xl border border-dashed border-slate-700 p-6 text-sm text-slate-400">No conversations match your current filter.</div>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="rounded-3xl border border-slate-800 bg-slate-900/80 p-5">
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-400">System health</p>
+              <div className="mt-4 space-y-3 text-sm text-slate-300">
+                <div className="flex items-center justify-between">
+                  <span>AI provider</span>
+                  <span className="text-indigo-300">{data.systemHealth?.ai?.provider || 'unknown'}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Google Sheets</span>
+                  <span className={data.systemHealth?.googleSheets?.configured ? 'text-emerald-300' : 'text-amber-300'}>
+                    {data.systemHealth?.googleSheets?.configured ? 'Connected' : 'Not configured'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Messenger</span>
+                  <span className={data.systemHealth?.facebookMessenger?.configured ? 'text-emerald-300' : 'text-amber-300'}>
+                    {data.systemHealth?.facebookMessenger?.configured ? 'Connected' : 'Not configured'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Storage</span>
+                  <span className="text-sky-300">In-memory</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-800 bg-slate-900/80 p-5">
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Quick actions</p>
+              <div className="mt-4 grid gap-3">
+                <SettingToggle label="AI responses" description="Allow the assistant to answer customers" enabled={Boolean(data.settings?.aiEnabled)} saving={savingSetting === 'aiEnabled'} onChange={(value) => updateSetting('aiEnabled', value)} />
+                <SettingToggle label="Human handoff" description="Allow customers to request a human agent" enabled={Boolean(data.settings?.humanHandoffEnabled)} saving={savingSetting === 'humanHandoffEnabled'} onChange={(value) => updateSetting('humanHandoffEnabled', value)} />
+                <SettingToggle label="Conversation memory" description="Keep recent messages for better context" enabled={Boolean(data.settings?.conversationMemoryEnabled)} saving={savingSetting === 'conversationMemoryEnabled'} onChange={(value) => updateSetting('conversationMemoryEnabled', value)} />
+                <SettingToggle label="FAQ search" description="Use the FAQ knowledge base for answers" enabled={Boolean(data.settings?.faqSearchEnabled)} saving={savingSetting === 'faqSearchEnabled'} onChange={(value) => updateSetting('faqSearchEnabled', value)} />
+                <SettingToggle label="Product search" description="Use the product database for stock and price" enabled={Boolean(data.settings?.productSearchEnabled)} saving={savingSetting === 'productSearchEnabled'} onChange={(value) => updateSetting('productSearchEnabled', value)} />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-4 xl:grid-cols-2">
+          <div className="rounded-3xl border border-slate-800 bg-slate-900/80 p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-xl font-semibold">Unanswered questions</h3>
+              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-300">{filteredQuestions.length}</span>
+            </div>
+            <div className="space-y-3">
+              {filteredQuestions.length ? filteredQuestions.slice(0, 6).map((item) => (
+                <div key={item.id} className="rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+                  <p className="font-medium text-slate-100">{item.question}</p>
+                  <p className="mt-2 text-xs text-slate-400">{item.intent || 'general'} • {item.channel || 'web'}</p>
+                </div>
+              )) : (
+                <div className="rounded-2xl border border-dashed border-slate-700 p-5 text-sm text-slate-400">No unanswered questions found.</div>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-slate-800 bg-slate-900/80 p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-xl font-semibold">Control center</h3>
+              <FiActivity className="text-indigo-300" />
+            </div>
+            <div className="space-y-3 text-sm text-slate-300">
+              <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+                <span>AI enabled</span>
+                <span className="text-emerald-300">{data.settings?.aiEnabled ? 'On' : 'Off'}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+                <span>Human handoff</span>
+                <span className="text-emerald-300">{data.settings?.humanHandoffEnabled ? 'On' : 'Off'}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+                <span>FAQ search</span>
+                <span className="text-emerald-300">{data.settings?.faqSearchEnabled ? 'On' : 'Off'}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+                <span>Product search</span>
+                <span className="text-emerald-300">{data.settings?.productSearchEnabled ? 'On' : 'Off'}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [view, setView] = useState('chat');
+  const [showAdminShortcut, setShowAdminShortcut] = useState(true);
+
+  useEffect(() => {
+    const savedToken = localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
+    setShowAdminShortcut(Boolean(savedToken));
+  }, []);
+
+  return (
+    <div>
+      <div className="fixed right-6 top-6 z-50 flex gap-2">
+        <button
+          onClick={() => setView('chat')}
+          className={`rounded-full px-4 py-2 text-sm font-medium ${view === 'chat' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-200'}`}
+        >
+          Customer Chat
+        </button>
+        <button
+          onClick={() => setView('admin')}
+          className={`rounded-full px-4 py-2 text-sm font-medium ${view === 'admin' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-200'}`}
+        >
+          Admin Dashboard
+        </button>
+      </div>
+      {view === 'admin' ? <AdminDashboard /> : <CustomerChatApp />}
     </div>
   );
 }

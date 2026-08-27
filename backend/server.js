@@ -4,7 +4,10 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { getGoogleSheetRows, isGoogleSheetConfigured, searchGoogleSheet } from './googleSheets.js';
+import { getCachedGoogleSheetRows, getGoogleSheetConfig, getGoogleSheetRows, isGoogleSheetConfigured, searchGoogleSheet, searchGoogleSheetWithConfidence, searchMobileBuySellProducts } from './googleSheets.js';
+import { getConversationMemory, getConversationState, getMessagesForReply, listConversationSessions, listConversationStates, saveConversationMessages, updateConversationState } from './conversationMemory.js';
+import { detectIntent, detectLanguage, getHandoffMessage, getHumanModeMessage, isHandoffRequest } from './businessFeatures.js';
+import { listUnansweredQuestions, recordUnansweredQuestion, updateUnansweredQuestion } from './feedbackStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -14,7 +17,7 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 dotenv.config({ path: path.resolve(__dirname, '.env') });
 
 const developerIdentityResponse = 'My developer is Mostafizur Rahman. This AI model was developed by Mostafizur Rahman and is powered by an AI model through.';
-const developerIdentitySystemPrompt = `You are 𝐏𝐢𝐩𝐢𝐥𝐢𝐤𝐚 𝐀𝐈.
+const developerIdentitySystemPrompt = `You are a helpful and professional customer service assistant for Mostafizur Rahman.
 
 This application was developed by Mostafizur Rahman.
 
@@ -51,13 +54,13 @@ const sheetSearchTools = [
     type: 'function',
     function: {
       name: 'search_google_sheet',
-      description: 'Search information stored in the user\'s Google Sheet and return matching rows.',
+      description: 'Search the existing Google Sheet, Ecommerce FAQ sheet, and authoritative Mobile Buy Sell product database. Use it for product models, prices, stock, RAM, condition, and full product details.',
       parameters: {
         type: 'object',
         properties: {
           query: {
             type: 'string',
-            description: 'The text to search in the sheet such as a person name, ID, phone number, course, status, payment, or any other column value.'
+            description: 'The natural-language question or filter to search, such as a model, price range, RAM, stock status, condition, full details, FAQ question, person name, ID, or other sheet value.'
           }
         },
         required: ['query']
@@ -92,7 +95,7 @@ const isDeveloperIdentityQuestion = (message) => {
 const buildChatMessages = (messages) => [
   {
     role: 'system',
-    content: `${developerIdentitySystemPrompt}\n\nYou must answer in the same language as the user. If the user asks in Bengali, respond in Bengali. If the user asks in English, respond in English. If a Google Sheet lookup returns rows, use only the information from those rows and do not invent additional data. If no matching data is found in the Google Sheet, reply in the user\'s language: "দুঃখিত, Google Sheet-এ এই তথ্যটি পাওয়া যায়নি।" in Bengali or "Sorry, this information was not found in the Google Sheet." in English.`
+    content: `${developerIdentitySystemPrompt}\n\nYou must answer in the same language as the user. If the user asks in Bengali, respond in Bengali. If the user asks in English, respond in English. If a Google Sheet lookup returns rows, use only the information from those rows and do not invent additional data. Mobile product price, stock, condition, RAM, model, date, and other returned fields are authoritative. For mobile product questions, never invent fields that are not present in the returned rows; if the requested field is absent, say: "এই তথ্যটি বর্তমানে আমাদের business database-এ নেই।" If no matching data is found in the Google Sheet, reply in the user\'s language: "দুঃখিত, Google Sheet-এ এই তথ্যটি পাওয়া যায়নি।" in Bengali or "Sorry, this information was not found in the Google Sheet." in English.`
   },
   ...messages
     .map((message) => ({
@@ -105,6 +108,196 @@ const buildChatMessages = (messages) => [
 const getLastUserMessage = (messages) => {
   const userMessage = [...messages].reverse().find((message) => message.role === 'user');
   return userMessage?.content || '';
+};
+
+const processedMessengerEventIds = new Set();
+
+const getMessengerEventKey = (event) => {
+  if (!event || typeof event !== 'object') {
+    return '';
+  }
+
+  const senderId = event.sender?.id || '';
+  const recipientId = event.recipient?.id || '';
+  const messageId = event.message?.mid || event.reaction?.mid || event.messaging_referral?.mid || event.delivery?.mids?.[0] || event.message?.message_id || event.message?.reply_to?.mid || '';
+  const eventTimestamp = event.timestamp || '';
+  const reaction = event.reaction?.reaction || '';
+  const action = event.reaction?.action || '';
+
+  return [senderId, recipientId, messageId, eventTimestamp, reaction, action].join(':');
+};
+
+export const normalizeMessengerReactionEvent = (event) => {
+  if (!event?.reaction || typeof event !== 'object') {
+    return null;
+  }
+
+  const reactionValue = String(event.reaction.reaction || '').trim();
+  const actionValue = String(event.reaction.action || '').trim();
+  const senderPsid = String(event.sender?.id || '').trim();
+  const recipientId = String(event.recipient?.id || '').trim();
+  const messageId = String(event.reaction.mid || event.message?.mid || event.message?.message_id || event.message?.reply_to?.mid || '').trim();
+
+  if (!senderPsid) {
+    return null;
+  }
+
+  const normalizedReaction = reactionValue.toLowerCase();
+  const normalizedAction = actionValue.toLowerCase();
+
+  return {
+    senderPsid,
+    recipientId,
+    messageId,
+    reaction: normalizedReaction || 'like',
+    action: normalizedAction || 'react',
+    timestamp: event.timestamp || null,
+    rawEvent: event
+  };
+};
+
+const shouldIgnoreDuplicateMessengerEvent = (event) => {
+  const key = getMessengerEventKey(event);
+  if (!key) {
+    return false;
+  }
+
+  if (processedMessengerEventIds.has(key)) {
+    console.log('Ignoring duplicate Messenger event:', key);
+    return true;
+  }
+
+  processedMessengerEventIds.add(key);
+  if (processedMessengerEventIds.size > 5000) {
+    const iterator = processedMessengerEventIds.values();
+    for (let index = 0; index < processedMessengerEventIds.size - 5000; index += 1) {
+      const next = iterator.next();
+      if (!next.done) {
+        processedMessengerEventIds.delete(next.value);
+      }
+    }
+  }
+
+  return false;
+};
+
+const getMessengerInteractionText = (event) => {
+  if (event?.reaction) {
+    const reactionEvent = normalizeMessengerReactionEvent(event);
+    if (!reactionEvent) {
+      return null;
+    }
+
+    return {
+      senderPsid: reactionEvent.senderPsid,
+      userText: reactionEvent.reaction === 'like' ? '👍' : 'reaction',
+      eventType: 'reaction',
+      metadata: {
+        reaction: reactionEvent.reaction,
+        action: reactionEvent.action,
+        messageId: reactionEvent.messageId,
+        timestamp: reactionEvent.timestamp
+      }
+    };
+  }
+
+  if (event?.message) {
+    if (typeof event.message.text === 'string' && event.message.text.trim()) {
+      return {
+        senderPsid: event.sender?.id,
+        userText: event.message.text.trim(),
+        eventType: 'message',
+        metadata: {}
+      };
+    }
+
+    if (Array.isArray(event.message.attachments) && event.message.attachments.length > 0) {
+      return {
+        senderPsid: event.sender?.id,
+        userText: '📎 User sent an attachment. Please help with the content in the attachment.',
+        eventType: 'attachment',
+        metadata: { attachmentCount: event.message.attachments.length }
+      };
+    }
+
+    if (event.message.sticker_id) {
+      return {
+        senderPsid: event.sender?.id,
+        userText: '😊 User sent a sticker.',
+        eventType: 'sticker',
+        metadata: { stickerId: event.message.sticker_id }
+      };
+    }
+
+    if (event.message.quick_reply?.payload) {
+      return {
+        senderPsid: event.sender?.id,
+        userText: String(event.message.quick_reply.payload || '').trim() || 'Quick reply received.',
+        eventType: 'quick_reply',
+        metadata: { quickReply: event.message.quick_reply.payload }
+      };
+    }
+  }
+
+  if (event?.postback?.payload) {
+    return {
+      senderPsid: event.sender?.id,
+      userText: String(event.postback.payload || '').trim() || 'Postback received.',
+      eventType: 'postback',
+      metadata: { payload: event.postback.payload }
+    };
+  }
+
+  return null;
+};
+
+export const processMessengerWebhookEvent = async (event) => {
+  if (!event || typeof event !== 'object') {
+    return null;
+  }
+
+  if (event.delivery || event.read || event.message?.is_echo) {
+    return null;
+  }
+
+  if (shouldIgnoreDuplicateMessengerEvent(event)) {
+    return null;
+  }
+
+  const interaction = getMessengerInteractionText(event);
+  if (!interaction) {
+    return null;
+  }
+
+  const { senderPsid, userText, eventType, metadata } = interaction;
+  if (!senderPsid || !userText) {
+    return null;
+  }
+
+  const sessionId = `messenger:${senderPsid}`;
+  const state = getConversationState(sessionId);
+  if (state.humanMode) {
+    return { handled: true, skippedReason: 'humanMode', eventType };
+  }
+
+  const reply = await sendMessengerReplyWithTyping({
+    senderPsid,
+    timeoutMs: 60000,
+    getReply: async () => getReplyWithMemory({
+      messages: [{
+        role: 'user',
+        content: userText,
+        ...(eventType === 'reaction' ? { type: 'reaction', reaction: metadata.reaction, action: metadata.action, messageId: metadata.messageId, timestamp: metadata.timestamp } : {}),
+        ...(eventType === 'attachment' ? { type: 'attachment', attachmentCount: metadata.attachmentCount } : {}),
+        ...(eventType === 'sticker' ? { type: 'sticker', stickerId: metadata.stickerId } : {}),
+        ...(eventType === 'quick_reply' ? { type: 'quick_reply', quickReply: metadata.quickReply } : {}),
+        ...(eventType === 'postback' ? { type: 'postback', payload: metadata.payload } : {})
+      }],
+      sessionId
+    })
+  });
+
+  return { handled: true, reply, eventType };
 };
 
 const getProviderConfig = (useProvider) => {
@@ -148,7 +341,7 @@ const getPreferredProvider = () => {
   return 'cohere';
 };
 
-const sendMessengerTextMessage = async (senderPsid, responseText) => {
+const sendMessengerRequest = async (senderPsid, payload) => {
   const pageAccessToken = process.env.PAGE_ACCESS_TOKEN;
   if (!pageAccessToken) {
     throw new Error('PAGE_ACCESS_TOKEN is not configured.');
@@ -157,7 +350,7 @@ const sendMessengerTextMessage = async (senderPsid, responseText) => {
   const facebookUrl = `https://graph.facebook.com/v16.0/me/messages?access_token=${encodeURIComponent(pageAccessToken)}`;
   const body = {
     recipient: { id: senderPsid },
-    message: { text: responseText }
+    ...payload
   };
 
   const fbResponse = await fetch(facebookUrl, {
@@ -172,14 +365,84 @@ const sendMessengerTextMessage = async (senderPsid, responseText) => {
   }
 };
 
+export const sendMessengerSenderAction = async (senderPsid, action) => {
+  const normalizedAction = action === 'typing_on' || action === 'typing_off' ? action : 'typing_on';
+  await sendMessengerRequest(senderPsid, { sender_action: normalizedAction });
+};
+
+export const sendMessengerTextMessage = async (senderPsid, responseText) => {
+  await sendMessengerRequest(senderPsid, { message: { text: String(responseText ?? '') } });
+};
+
+export const sendMessengerReplyWithTyping = async ({ senderPsid, getReply, timeoutMs = 60000 }) => {
+  if (!senderPsid) {
+    throw new Error('A sender PSID is required for Messenger typing actions.');
+  }
+
+  if (typeof getReply !== 'function') {
+    throw new Error('A reply callback is required for Messenger typing handling.');
+  }
+
+  let reply;
+
+  try {
+    await sendMessengerSenderAction(senderPsid, 'typing_on');
+    reply = await Promise.race([
+      getReply(),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('AI response timed out while generating a Messenger reply.')), timeoutMs);
+      })
+    ]);
+    return reply;
+  } catch (error) {
+    console.error(`Messenger reply failed for ${senderPsid}:`, error);
+    throw error;
+  } finally {
+    try {
+      await sendMessengerSenderAction(senderPsid, 'typing_off');
+      if (reply !== undefined && reply !== null && reply !== '') {
+        await sendMessengerTextMessage(senderPsid, reply);
+      }
+    } catch (typingError) {
+      console.error(`Failed to turn off Messenger typing state for ${senderPsid}:`, typingError);
+    }
+  }
+};
+
 const getGoogleSheetToolResult = async (query) => {
   if (!isGoogleSheetConfigured()) {
     return { results: [], configured: false };
   }
 
-  const rows = await getGoogleSheetRows();
-  const results = searchGoogleSheet(query, rows);
-  return { results, configured: true };
+  const { spreadsheetId, faqSpreadsheetId } = getGoogleSheetConfig();
+  const { mobileBuySellSpreadsheetId } = getGoogleSheetConfig();
+  const [faqRows, existingRows, mobileRows] = await Promise.all([
+    faqSpreadsheetId ? getCachedGoogleSheetRows(faqSpreadsheetId) : Promise.resolve([]),
+    spreadsheetId ? getCachedGoogleSheetRows(spreadsheetId) : Promise.resolve([]),
+    mobileBuySellSpreadsheetId ? getCachedGoogleSheetRows(mobileBuySellSpreadsheetId).catch(() => null) : Promise.resolve([])
+  ]);
+  if (mobileRows === null && isMobileProductQuestion(query)) return { results: [], configured: true, mobileUnavailable: true };
+  const mobileResults = searchMobileBuySellProducts(query, mobileRows);
+  if (mobileResults.length) return { results: mobileResults, configured: true, source: 'mobile_buy_sell', confidence: 1 };
+  const faqMatch = searchGoogleSheetWithConfidence(query, faqRows);
+  const faqResults = faqMatch.results;
+  const generalResults = searchGoogleSheet(query, existingRows);
+  const combinedResults = [...faqResults, ...generalResults].filter((row, index, rows) => rows.findIndex((candidate) => candidate === row) === index);
+
+  if (combinedResults.length) {
+    return {
+      results: combinedResults.slice(0, 20),
+      configured: true,
+      source: faqResults.length ? 'faq' : 'existing',
+      confidence: Math.max(faqMatch.confidence || 0, faqResults.length ? 0.6 : 0.5)
+    };
+  }
+
+  if (faqMatch.confidence > 0) {
+    return { results: [], configured: true, source: 'faq', confidence: faqMatch.confidence };
+  }
+
+  return { results: generalResults, configured: true, source: 'existing', confidence: generalResults.length ? 0.5 : 0 };
 };
 
 const getNotFoundGoogleSheetMessage = (query) => {
@@ -194,7 +457,12 @@ const getNotFoundGoogleSheetMessage = (query) => {
     : 'Sorry, this information was not found in the Google Sheet.';
 };
 
-const getAiReply = async ({ messages: incomingMessages, requestedModel }) => {
+const isMobileProductQuestion = (query) => /iphone|samsung|galaxy|mobile|phone|ফোন|মোবাইল|ram|স্টক|stock|price|দাম|condition|কন্ডিশন|database|ডাটাবেস/i.test(String(query || ''));
+const getMobileDatabaseUnavailableMessage = (query) => /[\u0980-\u09FF]/.test(String(query || ''))
+  ? 'দুঃখিত, বর্তমানে আমাদের mobile business database access করা যাচ্ছে না। অনুগ্রহ করে কিছুক্ষণ পরে আবার চেষ্টা করুন।'
+  : 'Sorry, our mobile business database is currently unavailable. Please try again later.';
+
+const getAiReply = async ({ messages: incomingMessages, requestedModel, sessionId = '' }) => {
   const messages = Array.isArray(incomingMessages)
     ? incomingMessages
     : [];
@@ -223,7 +491,9 @@ const getAiReply = async ({ messages: incomingMessages, requestedModel }) => {
     temperature: 0.2
   };
 
-  if (useProvider === 'groq' && isGoogleSheetConfigured()) {
+  const canSearchProductDatabase = adminSettings.productSearchEnabled && isMobileProductQuestion(latestUserMessage);
+  const canSearchFaq = adminSettings.faqSearchEnabled && !isMobileProductQuestion(latestUserMessage);
+  if (useProvider === 'groq' && isGoogleSheetConfigured() && (canSearchProductDatabase || canSearchFaq)) {
     requestPayload.tools = sheetSearchTools;
     requestPayload.tool_choice = 'auto';
   }
@@ -274,12 +544,17 @@ const getAiReply = async ({ messages: incomingMessages, requestedModel }) => {
         return 'Sorry, this information was not found in the Google Sheet.';
       }
 
-      const { results, configured } = await getGoogleSheetToolResult(query);
+      const { results, configured, mobileUnavailable, confidence } = await getGoogleSheetToolResult(query);
       if (!configured) {
-        return 'Google Sheets credentials are not configured yet. Please add GOOGLE_SHEET_ID, GOOGLE_SERVICE_ACCOUNT_EMAIL, and GOOGLE_PRIVATE_KEY in the backend .env file.';
+        return 'Google Sheets credentials are not configured yet. Please add GOOGLE_SHEET_ID or ECOMMERCE_FAQ_SPREADSHEET_ID, plus GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY or GOOGLE_API_KEY, in the backend .env file.';
+      }
+
+      if (mobileUnavailable) {
+        return getMobileDatabaseUnavailableMessage(query);
       }
 
       if (!results.length) {
+        recordUnansweredQuestion({ sessionId, channel: sessionId.startsWith('messenger:') ? 'messenger' : 'web', question: query, language: detectLanguage(query), intent: detectIntent(query), confidence, response: getNotFoundGoogleSheetMessage(query) });
         return getNotFoundGoogleSheetMessage(query);
       }
 
@@ -333,7 +608,109 @@ const getAiReply = async ({ messages: incomingMessages, requestedModel }) => {
   return assistantMessage?.content || 'No response generated.';
 };
 
+const getReplyWithMemory = async ({ messages, requestedModel, sessionId }) => {
+  if (!adminSettings.aiEnabled) {
+    return 'AI is temporarily disabled by the administrator.';
+  }
+
+  const latestMessage = [...messages].reverse().find((message) => message.role === 'user' && String(message.content || '').trim());
+  if (!sessionId || !latestMessage) {
+    return getAiReply({ messages, requestedModel });
+  }
+
+  const language = detectLanguage(latestMessage.content);
+  const intent = detectIntent(latestMessage.content);
+  const currentState = getConversationState(sessionId);
+  updateConversationState(sessionId, { language, lastIntent: intent });
+  if (currentState.humanMode) {
+    const reply = getHumanModeMessage(language);
+    saveConversationMessages(sessionId, [...getConversationMemory(sessionId), latestMessage, { role: 'assistant', content: reply }]);
+    return reply;
+  }
+  if (adminSettings.humanHandoffEnabled && isHandoffRequest(latestMessage.content)) {
+    const reply = getHandoffMessage(language);
+    updateConversationState(sessionId, { humanMode: true, handoffRequired: true, handoffRequestedAt: new Date().toISOString() });
+    saveConversationMessages(sessionId, [...getConversationMemory(sessionId), latestMessage, { role: 'assistant', content: reply }]);
+    recordUnansweredQuestion({ sessionId, channel: sessionId.startsWith('messenger:') ? 'messenger' : 'web', question: latestMessage.content, language, intent: 'handoff', response: reply, handoffRequired: true });
+    return reply;
+  }
+
+  const contextMessages = getMessagesForReply(sessionId, latestMessage);
+  const reply = await getAiReply({ messages: contextMessages, requestedModel, sessionId });
+  if (adminSettings.conversationMemoryEnabled) {
+    saveConversationMessages(sessionId, [...contextMessages, { role: 'assistant', content: reply }]);
+  }
+  if (intent === 'business_search' && /not found|not available|doesn't have|database|Google Sheet|তথ্যটি পাওয়া যায়নি|নেই/i.test(reply)) {
+    recordUnansweredQuestion({ sessionId, channel: sessionId.startsWith('messenger:') ? 'messenger' : 'web', question: latestMessage.content, language, intent, confidence: 0, response: reply });
+  }
+  return reply;
+};
+
 const app = express();
+const adminSettings = {
+  aiEnabled: true,
+  aiResponseMode: 'balanced',
+  humanHandoffEnabled: true,
+  conversationMemoryEnabled: true,
+  faqSearchEnabled: true,
+  productSearchEnabled: true,
+  salesAssistantEnabled: true,
+  banglaSupport: true,
+  englishSupport: true,
+  banglishSupport: true
+};
+
+const getSystemHealth = () => ({
+  ai: { status: process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY || process.env.COHERE_API_KEY || process.env.API_KEY ? 'online' : 'offline', provider: getPreferredProvider() },
+  googleSheets: { status: isGoogleSheetConfigured() ? 'connected' : 'warning', configured: isGoogleSheetConfigured() },
+  facebookMessenger: { status: process.env.PAGE_ACCESS_TOKEN ? 'connected' : 'warning', configured: Boolean(process.env.PAGE_ACCESS_TOKEN) },
+  storage: { status: 'connected', type: 'in-memory' },
+  lastCheckedAt: new Date().toISOString()
+});
+
+const getAdminOverview = () => {
+  const conversations = listConversationSessions().map(({ sessionId, messages }) => {
+    const state = getConversationState(sessionId);
+    const messageList = Array.isArray(messages) ? messages : [];
+    const lastMessage = [...messageList].reverse().find((message) => message.role === 'user' || message.role === 'assistant');
+    return {
+      sessionId,
+      customerId: sessionId.startsWith('messenger:') ? sessionId.replace('messenger:', '') : sessionId.replace('web:', '') || 'web',
+      channel: sessionId.startsWith('messenger:') ? 'messenger' : 'web',
+      lastMessage: lastMessage?.content || '',
+      lastActivity: messageList.length ? messageList[messageList.length - 1]?.timestamp || new Date().toISOString() : new Date().toISOString(),
+      status: state.humanMode ? 'HUMAN_ACTIVE' : state.handoffRequired ? 'HANDOFF_REQUIRED' : 'AI_ACTIVE',
+      humanMode: Boolean(state.humanMode),
+      handoffRequired: Boolean(state.handoffRequired),
+      messageCount: messageList.length
+    };
+  }).sort((a, b) => (b.lastActivity || '').localeCompare(a.lastActivity || ''));
+
+  const unansweredQuestions = listUnansweredQuestions();
+  const handoffRequests = conversations.filter((conversation) => conversation.handoffRequired || conversation.humanMode).length;
+  const totalCustomers = new Set(conversations.map((conversation) => conversation.customerId).filter(Boolean)).size;
+  const today = new Date();
+  const todayDate = today.toISOString().slice(0, 10);
+  const todaysConversations = conversations.filter((conversation) => (conversation.lastActivity || '').slice(0, 10) === todayDate).length;
+
+  return {
+    stats: {
+      totalConversations: conversations.length,
+      todaysConversations,
+      activeCustomers: totalCustomers,
+      aiResponses: conversations.length,
+      humanHandled: conversations.filter((conversation) => conversation.humanMode).length,
+      unansweredQuestions: unansweredQuestions.length,
+      handoffRequests,
+      salesLeads: 0
+    },
+    conversations: conversations.slice(0, 50),
+    unansweredQuestions: unansweredQuestions.slice(0, 25),
+    systemHealth: getSystemHealth(),
+    settings: { ...adminSettings }
+  };
+};
+
 // Fall back to 5009 if the environment does not specify a port.
 const requestedPort = Number(process.env.PORT || 5009);
 
@@ -350,6 +727,20 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const frontendDistPath = path.resolve(__dirname, '../frontend/dist');
+
+const requireAdmin = (req, res, next) => {
+  const configuredTokens = [process.env.INGEST_KEY, process.env.ADMIN_TOKEN]
+    .map((value) => value?.trim())
+    .filter(Boolean);
+  const authorization = String(req.headers.authorization || '');
+  const queryToken = req.method === 'GET' ? String(req.query.token || '').trim() : '';
+  if (!configuredTokens.length) return res.status(503).json({ error: 'INGEST_KEY or ADMIN_TOKEN is not configured.' });
+  const isAuthorized = configuredTokens.some((configuredToken) => (
+    authorization === `Bearer ${configuredToken}` || queryToken === configuredToken
+  ));
+  if (!isAuthorized) return res.status(401).json({ error: 'Unauthorized.' });
+  return next();
+};
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
@@ -400,25 +791,7 @@ app.post('/webhook', async (req, res) => {
 
     for (const entry of body.entry || []) {
       for (const event of entry.messaging || []) {
-        // Ignore delivery, read receipts, and echo events.
-        if (event.delivery || event.read || event.message?.is_echo) {
-          continue;
-        }
-
-        if (event.message && typeof event.message.text === 'string') {
-          const senderPsid = event.sender?.id;
-          const userText = event.message.text.trim();
-
-          if (!senderPsid || !userText) {
-            continue;
-          }
-
-          const reply = await getAiReply({
-            messages: [{ role: 'user', content: userText }]
-          });
-
-          await sendMessengerTextMessage(senderPsid, reply);
-        }
+        await processMessengerWebhookEvent(event);
       }
     }
 
@@ -427,6 +800,55 @@ app.post('/webhook', async (req, res) => {
     console.error('Messenger webhook error:', error);
     return res.status(500).json({ error: 'Messenger webhook processing failed.' });
   }
+});
+
+app.get('/api/admin/overview', requireAdmin, (req, res) => {
+  return res.json(getAdminOverview());
+});
+
+app.get('/api/admin/health', requireAdmin, (req, res) => {
+  return res.json({ status: 'ok', health: getSystemHealth() });
+});
+
+app.get('/api/admin/settings', requireAdmin, (req, res) => {
+  return res.json({ settings: adminSettings });
+});
+
+app.patch('/api/admin/settings', requireAdmin, (req, res) => {
+  const allowedSettings = Object.keys(adminSettings);
+  const patch = Object.fromEntries(Object.entries(req.body || {})
+    .filter(([key, value]) => allowedSettings.includes(key) && typeof value === 'boolean'));
+  Object.assign(adminSettings, patch);
+  return res.json({ settings: adminSettings });
+});
+
+app.get('/api/admin/conversations', requireAdmin, (req, res) => {
+  const sessions = listConversationSessions().map(({ sessionId, messages }) => ({
+    sessionId,
+    customerId: sessionId.startsWith('messenger:') ? sessionId.replace('messenger:', '') : sessionId.replace('web:', '') || 'web',
+    channel: sessionId.startsWith('messenger:') ? 'messenger' : 'web',
+    messages: [...messages],
+    state: getConversationState(sessionId)
+  }));
+  return res.json({ conversations: sessions });
+});
+
+app.get('/api/admin/conversations/:sessionId', requireAdmin, (req, res) => {
+  const sessionId = req.params.sessionId;
+  const messages = getConversationMemory(sessionId);
+  return res.json({ sessionId, messages, state: getConversationState(sessionId) });
+});
+
+app.get('/api/admin/handoffs', requireAdmin, (req, res) => {
+  return res.json({ conversations: listConversationStates().filter((state) => state.handoffRequired || state.humanMode) });
+});
+
+app.get('/api/admin/unanswered', requireAdmin, (req, res) => {
+  return res.json({ questions: listUnansweredQuestions() });
+});
+
+app.get('/api/admin/conversations/:sessionId/mode', requireAdmin, (req, res) => {
+  return res.json({ sessionId: req.params.sessionId, state: getConversationState(req.params.sessionId) });
 });
 
 app.use(express.static(frontendDistPath));
@@ -451,8 +873,10 @@ app.post('/api/google-sheet/search', async (req, res) => {
       return res.status(500).json({ error: 'Google Sheets credentials are not configured. Please set GOOGLE_SHEET_ID, GOOGLE_SERVICE_ACCOUNT_EMAIL, and GOOGLE_PRIVATE_KEY in the backend .env file.' });
     }
 
-    const rows = await getGoogleSheetRows();
-    const results = searchGoogleSheet(query, rows);
+    const { results, configured } = await getGoogleSheetToolResult(query);
+    if (!configured) {
+      return res.status(500).json({ error: 'Google Sheets credentials are not configured. Please set GOOGLE_SHEET_ID or ECOMMERCE_FAQ_SPREADSHEET_ID, plus GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY or GOOGLE_API_KEY, in the backend .env file.' });
+    }
     return res.json({ results });
   } catch (error) {
     console.error('Google Sheet search error:', error);
@@ -460,9 +884,36 @@ app.post('/api/google-sheet/search', async (req, res) => {
   }
 });
 
+app.post('/api/feedback/unanswered', (req, res) => {
+  const question = String(req.body?.question || '').trim();
+  if (!question) return res.status(400).json({ error: 'A question is required.' });
+  return res.status(201).json(recordUnansweredQuestion({
+    sessionId: String(req.body?.sessionId || '').trim(),
+    channel: String(req.body?.channel || 'unknown'),
+    question,
+    language: String(req.body?.language || detectLanguage(question)),
+    intent: String(req.body?.intent || detectIntent(question)),
+    confidence: Number(req.body?.confidence || 0),
+    response: String(req.body?.response || ''),
+    handoffRequired: Boolean(req.body?.handoffRequired)
+  }));
+});
+
+app.patch('/api/admin/conversations/:sessionId/mode', requireAdmin, (req, res) => {
+  const humanMode = Boolean(req.body?.humanMode);
+  const state = updateConversationState(req.params.sessionId, { humanMode, ...(humanMode ? {} : { handoffRequired: false }) });
+  return res.json({ sessionId: req.params.sessionId, state });
+});
+
+app.patch('/api/admin/unanswered/:id', requireAdmin, (req, res) => {
+  const item = updateUnansweredQuestion(req.params.id, { status: req.body?.status || 'reviewed' });
+  if (!item) return res.status(404).json({ error: 'Unanswered question not found.' });
+  return res.json(item);
+});
+
 app.post('/api/chat', async (req, res) => {
   try {
-    const { messages: incomingMessages, message, model: requestedModel } = req.body;
+    const { messages: incomingMessages, message, model: requestedModel, conversationId } = req.body;
     const messages = Array.isArray(incomingMessages) && incomingMessages.length > 0
       ? incomingMessages
       : typeof message === 'string' && message.trim() !== ''
@@ -473,7 +924,12 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'A non-empty message is required.' });
     }
 
-    const reply = await getAiReply({ messages, requestedModel });
+    const normalizedConversationId = String(conversationId || '').trim();
+    const reply = await getReplyWithMemory({
+      messages,
+      requestedModel,
+      sessionId: normalizedConversationId ? `web:${normalizedConversationId}` : ''
+    });
     return res.json({ reply });
   } catch (error) {
     if (error?.status && error?.message) {
@@ -503,4 +959,6 @@ const startServer = (portToUse) => {
   });
 };
 
-startServer(requestedPort);
+if (process.env.NODE_ENV !== 'test') {
+  startServer(requestedPort);
+}
