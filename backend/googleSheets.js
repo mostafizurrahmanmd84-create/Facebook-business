@@ -37,6 +37,7 @@ const addQueryVariants = (term) => {
   return [...variants];
 };
 const getExpandedSearchTerms = (query) => [...new Set(getSearchTerms(query).flatMap((term) => addQueryVariants(term)))];
+export const isAllRowsQuery = (query) => /\ball\b|\bevery(?:thing|one|body)?\b|\bfull\b|\bcomplete\b|\bentire\b|সব|সকল|সম্পূর্ণ|ডাটাবেস|database/i.test(normalizeQuery(query));
 
 const normalizeDigits = (value) => String(value || '').replace(/[০-৯]/g, (digit) => '০১২৩৪৫৬৭৮৯'.indexOf(digit));
 const normalizeMobileText = (value) => normalizeDigits(value)
@@ -158,6 +159,7 @@ export const searchMobileBuySellProducts = (query, rows = []) => {
 export const searchGoogleSheet = (query, rows = []) => {
   const normalizedQuery = normalizeQuery(query);
   if (!normalizedQuery) return [];
+  if (isAllRowsQuery(normalizedQuery)) return rows.filter((row) => row && typeof row === 'object' && Object.values(row).some((value) => normalizeCellValue(value) !== ''));
   const searchTerms = getExpandedSearchTerms(normalizedQuery);
   const fieldMatch = normalizedQuery.match(/^([a-z]+)\s+(.+)$/);
   const fieldName = fieldMatch && rows.some((row) => row && typeof row === 'object' && Object.keys(row).some((key) => normalizeQuery(key) === fieldMatch[1])) ? fieldMatch[1] : '';
@@ -192,13 +194,13 @@ export const searchGoogleSheetWithConfidence = (query, rows = []) => {
     : { results: [], confidence, matchedFields: ranked[0].matchedFields };
 };
 
-const convertSheetRows = (values) => {
+export const convertSheetRows = (values) => {
   if (!Array.isArray(values) || values.length === 0) return [];
-  const headers = values[0].map((header) => String(header || '').trim()).filter(Boolean);
+  const headers = values[0].map((header, index) => ({ name: String(header || '').trim(), index })).filter(({ name }) => name);
   if (!headers.length) return [];
   return values.slice(1).map((row) => {
     const rowObject = {};
-    headers.forEach((header, index) => { rowObject[header] = row[index] ?? ''; });
+    headers.forEach(({ name, index }) => { rowObject[name] = row[index] ?? ''; });
     return rowObject;
   }).filter((row) => Object.values(row).some((value) => normalizeCellValue(value) !== ''));
 };
@@ -238,7 +240,8 @@ const sheetRowsCache = new Map();
 export const getCachedGoogleSheetRows = async (spreadsheetId) => {
   const selectedSpreadsheetId = String(spreadsheetId || '').trim();
   if (!selectedSpreadsheetId) return [];
-  const ttlMs = Number(process.env.GOOGLE_SHEETS_CACHE_TTL_MS || 60000);
+  const configuredTtlMs = Number(process.env.GOOGLE_SHEETS_CACHE_TTL_MS || 0);
+  const ttlMs = Number.isFinite(configuredTtlMs) && configuredTtlMs > 0 ? configuredTtlMs : 0;
   const cached = sheetRowsCache.get(selectedSpreadsheetId);
   if (cached && cached.expiresAt > Date.now()) return cached.rows;
   if (cached?.promise) return cached.promise;

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { normalizeQuery, searchGoogleSheet, searchGoogleSheetWithConfidence } from './googleSheets.js';
+import { convertSheetRows, isAllRowsQuery, normalizeQuery, searchGoogleSheet, searchGoogleSheetWithConfidence } from './googleSheets.js';
 
 test('normalizeQuery trims and lowercases user search text', () => {
   assert.equal(normalizeQuery('  Karim   '), 'karim');
@@ -83,4 +83,21 @@ test('matches pluralized fee queries against charge rows without a false no-data
 
   assert.equal(matched.results[0], rows[0]);
   assert.ok(matched.confidence > 0);
+});
+
+test('returns every populated row for explicit full-data queries', () => {
+  const rows = Array.from({ length: 25 }, (_, index) => ({ ID: String(index + 1), Name: `Person ${index + 1}` }));
+
+  assert.equal(isAllRowsQuery('show me all records'), true);
+  assert.equal(searchGoogleSheet('show me all records', rows).length, 25);
+  assert.equal(searchGoogleSheet('show me every product', rows).length, 25);
+});
+
+test('preserves source indexes when a sheet has an empty header column', () => {
+  const rows = convertSheetRows([
+    ['Name', '', 'Status'],
+    ['Rahim', 'ignored value', 'Active']
+  ]);
+
+  assert.deepEqual(rows, [{ Name: 'Rahim', Status: 'Active' }]);
 });

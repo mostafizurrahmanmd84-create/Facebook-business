@@ -4,7 +4,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { formatMobileProductRows, getCachedGoogleSheetRows, getGoogleSheetConfig, getGoogleSheetRows, isGoogleSheetConfigured, searchGoogleSheet, searchGoogleSheetWithConfidence, searchMobileBuySellProducts } from './googleSheets.js';
+import { formatMobileProductRows, getCachedGoogleSheetRows, getGoogleSheetConfig, getGoogleSheetRows, isAllRowsQuery, isGoogleSheetConfigured, searchGoogleSheet, searchGoogleSheetWithConfidence, searchMobileBuySellProducts } from './googleSheets.js';
 import { getConversationMemory, getConversationState, getMessagesForReply, listConversationSessions, listConversationStates, saveConversationMessages, updateConversationState } from './conversationMemory.js';
 import { detectIntent, detectLanguage, getHandoffMessage, getHumanModeMessage, isHandoffRequest } from './businessFeatures.js';
 import { listUnansweredQuestions, recordUnansweredQuestion, updateUnansweredQuestion } from './feedbackStore.js';
@@ -428,7 +428,7 @@ const getGoogleSheetToolResult = async (query) => {
 
   if (combinedResults.length) {
     return {
-      results: combinedResults.slice(0, 20),
+      results: isAllRowsQuery(query) ? combinedResults : combinedResults.slice(0, 20),
       configured: true,
       source: faqResults.length ? 'faq' : 'existing',
       confidence: Math.max(faqMatch.confidence || 0, faqResults.length ? 0.6 : 0.5)
