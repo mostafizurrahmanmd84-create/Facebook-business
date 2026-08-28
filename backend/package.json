@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "server": "node server.js",
-    "test": "NODE_ENV=test node --test"
+    "test": "node --test"
   },
   "dependencies": {
     "cors": "^2.8.5",

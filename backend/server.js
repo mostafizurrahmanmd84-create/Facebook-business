@@ -4,7 +4,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { formatMobileProductResponse, getCachedGoogleSheetRows, getGoogleSheetConfig, getGoogleSheetRows, isGoogleSheetConfigured, searchMobileBuySellProducts } from './googleSheets.js';
+import { formatMobileProductRows, getCachedGoogleSheetRows, getGoogleSheetConfig, getGoogleSheetRows, isGoogleSheetConfigured, searchMobileBuySellProducts } from './googleSheets.js';
 import { getConversationMemory, getConversationState, getMessagesForReply, listConversationSessions, listConversationStates, saveConversationMessages, updateConversationState } from './conversationMemory.js';
 import { detectIntent, detectLanguage, getHandoffMessage, getHumanModeMessage, isHandoffRequest } from './businessFeatures.js';
 import { listUnansweredQuestions, recordUnansweredQuestion, updateUnansweredQuestion } from './feedbackStore.js';
@@ -532,10 +532,6 @@ const getAiReply = async ({ messages: incomingMessages, requestedModel, sessionI
       if (!results.length) {
         recordUnansweredQuestion({ sessionId, channel: sessionId.startsWith('messenger:') ? 'messenger' : 'web', question: query, language: detectLanguage(query), intent: detectIntent(query), confidence, response: getNotFoundGoogleSheetMessage(query) });
         return getNotFoundGoogleSheetMessage(query);
-      }
-
-      if (results.every((result) => Object.hasOwn(result, 'Brand + Model'))) {
-        return formatMobileProductResponse(results);
       }
 
       const toolResult = JSON.stringify({ results });

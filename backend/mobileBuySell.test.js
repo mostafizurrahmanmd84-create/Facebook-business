@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { formatMobileProductResponse, formatMobileProductRows, searchMobileBuySellProducts } from './googleSheets.js';
+import { formatMobileProductRows, searchMobileBuySellProducts } from './googleSheets.js';
 
 const rows = [
   { Date: '2026-08-01', 'Brand + Model': 'iPhone 15', 'Storage + RAM': '128GB + 8GB', 'Physical Condition': 'Excellent', Price: '৳73,000', 'Product Stock': 'In Stock' },
@@ -52,11 +52,4 @@ test('formats mobile product results with the required English field labels', ()
     Price: '৳73,000',
     'Product Stock': 'In Stock'
   }]);
-  assert.equal(formatMobileProductResponse([rows[0]]), [
-    'Brand + Model: iPhone 15',
-    'Storage + RAM: 128GB + 8GB',
-    'Physical Condition: Excellent',
-    'Price: ৳73,000',
-    'Product Stock: In Stock'
-  ].join('\n'));
 });

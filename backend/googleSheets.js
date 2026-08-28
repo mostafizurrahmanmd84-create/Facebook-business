@@ -76,16 +76,6 @@ export const formatMobileProductRows = (rows = []) => rows.map((row) => {
   };
 });
 
-export const formatMobileProductResponse = (rows = []) => formatMobileProductRows(rows)
-  .map((product) => [
-    `Brand + Model: ${product['Brand + Model']}`,
-    `Storage + RAM: ${product['Storage + RAM']}`,
-    `Physical Condition: ${product['Physical Condition']}`,
-    `Price: ${product.Price}`,
-    `Product Stock: ${product['Product Stock']}`
-  ].join('\n'))
-  .join('\n\n');
-
 const parsePrice = (value) => {
   const normalized = normalizeDigits(value).replace(/,/g, '');
   const match = normalized.match(/\d+(?:\.\d+)?/);
