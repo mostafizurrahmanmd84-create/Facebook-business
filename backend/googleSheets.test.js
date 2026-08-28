@@ -53,17 +53,17 @@ test('required sample queries match the expected rows', () => {
 
 test('FAQ questions match their Question and Answer rows in English and Bangla', () => {
   const rows = [
-    { Question: 'What is the delivery charge?', Answer: 'Delivery charge is ৳60 inside Dhaka and ৳120 outside Dhaka.' },
-    { Question: 'Do you deliver outside Dhaka?', Answer: 'Yes, we deliver outside Dhaka.' },
+    { Question: 'What is the delivery charge?', Answer: 'Delivery charge is ৳60 inside Gaibandha and ৳120 outside Gaibandha.' },
+    { Question: 'Do you deliver outside Gaibandha?', Answer: 'Yes, we deliver outside Gaibandha.' },
     { Question: 'Can I pay with bKash?', Answer: 'Yes, bKash payment is accepted.' },
     { Question: 'How long will delivery take?', Answer: 'Delivery takes 2 to 5 business days.' },
-    { Question: 'ডেলিভারি চার্জ কত?', Answer: 'ঢাকার ভিতরে ডেলিভারি চার্জ ৳৬০ এবং ঢাকার বাইরে ৳১২০।' }
+    { Question: 'ডেলিভারি চার্জ কত?', Answer: 'গাইবান্ধা ভিতরে ডেলিভারি চার্জ ৳৬০ এবং গাইবান্ধা বাইরে ৳১২০।' }
   ];
 
   assert.equal(searchGoogleSheet('What is the delivery charge?', rows)[0].Answer, rows[0].Answer);
   assert.equal(searchGoogleSheet('How much is delivery?', rows)[0].Answer, rows[0].Answer);
   assert.equal(searchGoogleSheet('ডেলিভারি চার্জ কত?', rows)[0].Answer, rows[4].Answer);
-  assert.equal(searchGoogleSheet('Do you deliver outside Dhaka?', rows)[0].Answer, rows[1].Answer);
+  assert.equal(searchGoogleSheet('Do you deliver outside Gaibandha?', rows)[0].Answer, rows[1].Answer);
   assert.equal(searchGoogleSheet('Can I pay by bKash?', rows)[0].Answer, rows[2].Answer);
   assert.equal(searchGoogleSheet('How long does delivery take?', rows)[0].Answer, rows[3].Answer);
 });
@@ -78,7 +78,7 @@ test('confidence-aware FAQ search supports Banglish synonyms and rejects weak ma
 });
 
 test('matches pluralized fee queries against charge rows without a false no-data result', () => {
-  const rows = [{ Question: 'What is the delivery charge?', Answer: 'Delivery charge is ৳60 inside Dhaka.' }];
+  const rows = [{ Question: 'What is the delivery charge?', Answer: 'Delivery charge is ৳60 inside Gaibandha.' }];
   const matched = searchGoogleSheetWithConfidence('delivery fees', rows);
 
   assert.equal(matched.results[0], rows[0]);

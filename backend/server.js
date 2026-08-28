@@ -4,7 +4,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { formatMobileProductRows, getCachedGoogleSheetRows, getGoogleSheetConfig, getGoogleSheetRows, isAllRowsQuery, isGoogleSheetConfigured, searchGoogleSheet, searchGoogleSheetWithConfidence, searchMobileBuySellProducts } from './googleSheets.js';
+import { formatMobileProductRows, getCachedGoogleSheetRows, getGoogleSheetConfig, getGoogleSheetRows, isGoogleSheetConfigured, searchMobileBuySellProducts } from './googleSheets.js';
 import { getConversationMemory, getConversationState, getMessagesForReply, listConversationSessions, listConversationStates, saveConversationMessages, updateConversationState } from './conversationMemory.js';
 import { detectIntent, detectLanguage, getHandoffMessage, getHumanModeMessage, isHandoffRequest } from './businessFeatures.js';
 import { listUnansweredQuestions, recordUnansweredQuestion, updateUnansweredQuestion } from './feedbackStore.js';
@@ -27,7 +27,7 @@ const sheetSearchTools = [
     type: 'function',
     function: {
       name: 'search_google_sheet',
-      description: 'Search the existing Google Sheet, Ecommerce FAQ sheet, and authoritative Mobile Buy Sell product database. Use it for product models, prices, stock, RAM, condition, and full product details.',
+      description: 'Search the connected Google Sheet and authoritative Mobile Buy Sell product database. Use it for product models, prices, stock, RAM, condition, and full product details.',
       parameters: {
         type: 'object',
         properties: {
@@ -92,7 +92,7 @@ export const getDeveloperIdentityRedirect = (message) => {
 const buildChatMessages = (messages) => [
   {
     role: 'system',
-    content: `${developerIdentitySystemPrompt}\n\nYou must answer in the same language as the user. If the user asks in Bengali, respond in Bengali. If the user asks in English, respond in English. If a Google Sheet lookup returns rows, use only the information from those rows and do not invent additional data. Mobile product price, stock, condition, RAM, model, date, and other returned fields are authoritative. Whenever displaying mobile product results, always use these exact English field names and never translate, transliterate, or change them: "Brand + Model", "Storage + RAM", "Physical Condition", "Price", "Product Stock". For mobile product questions, never invent fields that are not present in the returned rows; if the requested field is absent, say: "এই তথ্যটি বর্তমানে আমাদের business database-এ নেই।" If no matching data is found in the Google Sheet, reply in the user\'s language: "দুঃখিত, Google Sheet-এ এই তথ্যটি পাওয়া যায়নি।" in Bengali or "Sorry, this information was not found in the Google Sheet." in English.`
+    content: `${developerIdentitySystemPrompt}\n\nYou must answer in the same language as the user. If the user asks in Bengali, respond in Bengali. If the user asks in English, respond in English. If a Google Sheet lookup returns rows, use only the information from those rows and do not invent additional data. Mobile product price, stock, condition, RAM, model, date, and other returned fields are authoritative. Whenever displaying mobile product results, always use these exact English field names and never translate, transliterate, or change them: "Brand + Model", "Storage + RAM", "Physical Condition", "Price", "Product Stock". For mobile product questions, never invent fields that are not present in the returned rows; if the requested field is absent, say: "এই তথ্যটি বর্তমানে আমাদের business database-এ নেই।" If the user asks for the shop name, answer exactly: "Mostafizur Rahman shop." If the user asks for a product picture/photo, or wants to inspect a phone's physical condition, tell them: "Phone-er condition dekhar jonno shop visit korben. Shop Location: Gaibandha Sadar. Contact: 01580913655. ধন্যবাদ 🙂". If no matching data is found in the Google Sheet, reply in the user\'s language: "দুঃখিত, Google Sheet-এ এই তথ্যটি পাওয়া যায়নি।" in Bengali or "Sorry, this information was not found in the Google Sheet." in English.`
   },
   ...messages
     .map((message) => ({
@@ -411,35 +411,14 @@ const getGoogleSheetToolResult = async (query) => {
     return { results: [], configured: false };
   }
 
-  const { spreadsheetId, faqSpreadsheetId } = getGoogleSheetConfig();
   const { mobileBuySellSpreadsheetId } = getGoogleSheetConfig();
-  const [faqRows, existingRows, mobileRows] = await Promise.all([
-    faqSpreadsheetId ? getCachedGoogleSheetRows(faqSpreadsheetId) : Promise.resolve([]),
-    spreadsheetId ? getCachedGoogleSheetRows(spreadsheetId) : Promise.resolve([]),
+  const mobileRows = await Promise.all([
     mobileBuySellSpreadsheetId ? getCachedGoogleSheetRows(mobileBuySellSpreadsheetId).catch(() => null) : Promise.resolve([])
-  ]);
+  ]).then(([rows]) => rows);
   if (mobileRows === null && isMobileProductQuestion(query)) return { results: [], configured: true, mobileUnavailable: true };
   const mobileResults = searchMobileBuySellProducts(query, mobileRows);
   if (mobileResults.length) return { results: formatMobileProductRows(mobileResults), configured: true, source: 'mobile_buy_sell', confidence: 1 };
-  const faqMatch = searchGoogleSheetWithConfidence(query, faqRows);
-  const faqResults = faqMatch.results;
-  const generalResults = searchGoogleSheet(query, existingRows);
-  const combinedResults = [...faqResults, ...generalResults].filter((row, index, rows) => rows.findIndex((candidate) => candidate === row) === index);
-
-  if (combinedResults.length) {
-    return {
-      results: isAllRowsQuery(query) ? combinedResults : combinedResults.slice(0, 20),
-      configured: true,
-      source: faqResults.length ? 'faq' : 'existing',
-      confidence: Math.max(faqMatch.confidence || 0, faqResults.length ? 0.6 : 0.5)
-    };
-  }
-
-  if (faqMatch.confidence > 0) {
-    return { results: [], configured: true, source: 'faq', confidence: faqMatch.confidence };
-  }
-
-  return { results: generalResults, configured: true, source: 'existing', confidence: generalResults.length ? 0.5 : 0 };
+  return { results: [], configured: true, source: 'mobile_buy_sell', confidence: 0 };
 };
 
 const getNotFoundGoogleSheetMessage = (query) => {
@@ -543,7 +522,7 @@ const getAiReply = async ({ messages: incomingMessages, requestedModel, sessionI
 
       const { results, configured, mobileUnavailable, confidence } = await getGoogleSheetToolResult(query);
       if (!configured) {
-        return 'Google Sheets credentials are not configured yet. Please add GOOGLE_SHEET_ID or ECOMMERCE_FAQ_SPREADSHEET_ID, plus GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY or GOOGLE_API_KEY, in the backend .env file.';
+        return 'Mobile Buy/Sell Google Sheet is not configured yet. Please add MOBILE_BUY_SELL_SPREADSHEET_ID, plus Google credentials, in the backend .env file.';
       }
 
       if (mobileUnavailable) {
@@ -867,12 +846,12 @@ app.post('/api/google-sheet/search', async (req, res) => {
     }
 
     if (!isGoogleSheetConfigured()) {
-      return res.status(500).json({ error: 'Google Sheets credentials are not configured. Please set GOOGLE_SHEET_ID, GOOGLE_SERVICE_ACCOUNT_EMAIL, and GOOGLE_PRIVATE_KEY in the backend .env file.' });
+      return res.status(500).json({ error: 'Mobile Buy/Sell Google Sheet is not configured. Please set MOBILE_BUY_SELL_SPREADSHEET_ID and Google credentials in the backend .env file.' });
     }
 
     const { results, configured } = await getGoogleSheetToolResult(query);
     if (!configured) {
-      return res.status(500).json({ error: 'Google Sheets credentials are not configured. Please set GOOGLE_SHEET_ID or ECOMMERCE_FAQ_SPREADSHEET_ID, plus GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY or GOOGLE_API_KEY, in the backend .env file.' });
+      return res.status(500).json({ error: 'Mobile Buy/Sell Google Sheet is not configured. Please set MOBILE_BUY_SELL_SPREADSHEET_ID and Google credentials in the backend .env file.' });
     }
     return res.json({ results });
   } catch (error) {

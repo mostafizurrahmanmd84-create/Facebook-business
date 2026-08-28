@@ -3,8 +3,6 @@ import crypto from 'node:crypto';
 export const normalizeQuery = (query = '') => String(query ?? '').trim().toLowerCase();
 
 export const getGoogleSheetConfig = () => ({
-  spreadsheetId: process.env.GOOGLE_SHEET_ID?.trim() || '',
-  faqSpreadsheetId: process.env.ECOMMERCE_FAQ_SPREADSHEET_ID?.trim() || '',
   mobileBuySellSpreadsheetId: process.env.MOBILE_BUY_SELL_SPREADSHEET_ID?.trim() || '',
   serviceAccountEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim() || '',
   privateKey: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n').trim() || '',
@@ -12,8 +10,8 @@ export const getGoogleSheetConfig = () => ({
 });
 
 export const isGoogleSheetConfigured = () => {
-  const { spreadsheetId, faqSpreadsheetId, mobileBuySellSpreadsheetId, serviceAccountEmail, privateKey, apiKey } = getGoogleSheetConfig();
-  return Boolean((spreadsheetId || faqSpreadsheetId || mobileBuySellSpreadsheetId) && ((serviceAccountEmail && privateKey) || apiKey));
+  const { mobileBuySellSpreadsheetId, serviceAccountEmail, privateKey, apiKey } = getGoogleSheetConfig();
+  return Boolean(mobileBuySellSpreadsheetId && ((serviceAccountEmail && privateKey) || apiKey));
 };
 
 const normalizeCellValue = (value) => value === null || value === undefined ? '' : String(value).trim();
@@ -224,9 +222,9 @@ const getAccessToken = async ({ serviceAccountEmail, privateKey }) => {
 };
 
 export const getGoogleSheetRows = async (requestedSpreadsheetId) => {
-  const { spreadsheetId, serviceAccountEmail, privateKey, apiKey } = getGoogleSheetConfig();
-  const selectedSpreadsheetId = requestedSpreadsheetId?.trim() || spreadsheetId;
-  if (!selectedSpreadsheetId) throw new Error('Google Sheets credentials are not configured. Please set GOOGLE_SHEET_ID or ECOMMERCE_FAQ_SPREADSHEET_ID in the backend .env file.');
+  const { serviceAccountEmail, privateKey, apiKey } = getGoogleSheetConfig();
+  const selectedSpreadsheetId = requestedSpreadsheetId?.trim() || '';
+  if (!selectedSpreadsheetId) throw new Error('Mobile Buy/Sell Google Sheet is not configured. Please set MOBILE_BUY_SELL_SPREADSHEET_ID in the backend .env file.');
   const accessToken = serviceAccountEmail && privateKey ? await getAccessToken({ serviceAccountEmail, privateKey }) : '';
   const query = accessToken ? '' : `?key=${encodeURIComponent(apiKey)}`;
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(selectedSpreadsheetId)}/values/A:ZZ${query}`, { headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined });
