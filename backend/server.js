@@ -424,13 +424,13 @@ const getGoogleSheetToolResult = async (query) => {
 const getNotFoundGoogleSheetMessage = (query) => {
   const normalized = String(query || '').trim();
   if (!normalized) {
-    return 'Sorry, this information was not found in the Google Sheet.';
+    return 'Sorry, this information was not found in the Business Database.';
   }
 
   const inBangla = /[\u0980-\u09FF]/.test(normalized);
   return inBangla
-    ? 'দুঃখিত, Google Sheet-এ এই তথ্যটি পাওয়া যায়নি।'
-    : 'Sorry, this information was not found in the Google Sheet.';
+    ? 'দুঃখিত, Business Database-এ এই তথ্যটি পাওয়া যায়নি।'
+    : 'Sorry, this information was not found in the Business Database.';
 };
 
 const isMobileProductQuestion = (query) => /iphone|samsung|galaxy|mobile|phone|ফোন|মোবাইল|ram|স্টক|stock|price|দাম|condition|কন্ডিশন|database|ডাটাবেস/i.test(String(query || ''));
